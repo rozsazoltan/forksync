@@ -35,6 +35,8 @@ forksync                            # Interactive menu
 forksync sync                       # Run now (prompts only if needed on a TTY)
 forksync sync --owner another-user  # One-run owner override
 forksync sync --scheduled           # Noninteractive, once per local calendar day
+forksync failed list                # List recorded failures and latest reasons
+forksync failed check               # Retry sync for recorded failures only
 forksync auth login                 # Enter + verify + securely save PAT
 forksync auth status
 forksync auth logout                # Delete only the saved OS credential
@@ -56,6 +58,8 @@ forksync schedule install           # OS-native once-daily job
 forksync schedule status
 forksync schedule remove
 ```
+
+`forksync failed check` performs sync retries and may modify forks.
 
 ### Configuration
 

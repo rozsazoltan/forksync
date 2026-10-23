@@ -102,11 +102,10 @@ pub async fn run(
         while running.len() < cfg.concurrency
             && summary.counted() + running.len() < cfg.max_repos_per_run
         {
-            let Some((index, repo)) = queue.pop_front() else {
+            let Some((_, repo)) = queue.pop_front() else {
                 break;
             };
             let prefix = repo_prefix(name_width, &repo.full_name);
-            let counter = repo_counter(index, total);
             let bar = add_repo_bar(
                 &multiprogress,
                 &overall,
@@ -123,7 +122,7 @@ pub async fn run(
                 finish_line(
                     &bar,
                     format!(
-                        "{prefix} {} Archived, disabled, or empty repository{counter}",
+                        "{prefix} {} Archived, disabled, or empty repository",
                         status("SKIP", "yellow", tty)
                     ),
                     tty,
@@ -139,10 +138,7 @@ pub async fn run(
             if !state.due(&repo.full_name, cfg.grace_days) {
                 finish_line(
                     &bar,
-                    format!(
-                        "{prefix} {} Cooldown active{counter}",
-                        status("SKIP", "yellow", tty)
-                    ),
+                    format!("{prefix} {} Cooldown active", status("SKIP", "yellow", tty)),
                     tty,
                     json,
                     &finished_style,
@@ -164,21 +160,22 @@ pub async fn run(
                     Ok(Merge::Unchanged) => Outcome::Skip,
                     Err(err) => Outcome::Failed(err.to_string()),
                 };
-                (repo.full_name, prefix, counter, bar, outcome)
+                (repo.full_name, prefix, bar, outcome)
             });
         }
         if running.is_empty() {
             break;
         }
         if let Some(result) = running.join_next().await {
-            let (name, prefix, counter, bar, outcome) = result?;
+            let (name, prefix, bar, outcome) = result?;
             match outcome {
                 Outcome::Ok => {
                     summary.ok += 1;
                     state.mark_checked(&name);
+                    state.failed_repos.remove(&name);
                     finish_line(
                         &bar,
-                        format!("{prefix} {} Synced{counter}", status("DONE", "green", tty)),
+                        format!("{prefix} {} Synced", status("DONE", "green", tty)),
                         tty,
                         json,
                         &finished_style,
@@ -187,10 +184,11 @@ pub async fn run(
                 Outcome::Skip => {
                     summary.skipped += 1;
                     state.mark_checked(&name);
+                    state.failed_repos.remove(&name);
                     finish_line(
                         &bar,
                         format!(
-                            "{prefix} {} Already up to date{counter}",
+                            "{prefix} {} Already up to date",
                             status("SKIP", "yellow", tty)
                         ),
                         tty,
@@ -201,9 +199,10 @@ pub async fn run(
                 Outcome::Failed(error) => {
                     summary.failed += 1;
                     state.clear_checked(&name);
+                    state.failed_repos.insert(name.clone(), error.clone());
                     finish_line(
                         &bar,
-                        format!("{prefix} {} {error}{counter}", status("FAILED", "red", tty)),
+                        format!("{prefix} {} {error}", status("FAILED", "red", tty)),
                         tty,
                         json,
                         &finished_style,
@@ -221,40 +220,26 @@ pub async fn run(
             state.save()?;
         }
     }
-    for (index, repo) in queue {
-        let prefix = repo_prefix(name_width, &repo.full_name);
-        let counter = repo_counter(index, total);
-        let bar = add_repo_bar(
-            &multiprogress,
-            &overall,
-            &mut overall_attached,
-            &mut spacer,
-            &spacer_style,
-            &style,
-        );
-        finish_line(
-            &bar,
-            format!(
-                "{prefix} {} Run limit reached{counter}",
-                status("SKIP", "yellow", tty)
-            ),
-            tty,
-            json,
-            &finished_style,
-        );
-        summary.skipped += 1;
-        if let Some(overall) = &overall {
-            overall.inc(1);
-        }
-    }
     if !json {
-        println!(
-            "Summary · {} synced · {} failed · {} skipped",
+        let processed = summary.ok + summary.failed + summary.skipped;
+        let limit_suffix = if !queue.is_empty() {
+            format!(" · stopped at {}-repo limit", cfg.max_repos_per_run)
+        } else {
+            String::new()
+        };
+        let final_log = format!(
+            "{processed}/{total} repos · {} synced · {} failed · {} skipped{limit_suffix}",
             summary.ok, summary.failed, summary.skipped
         );
-    }
-    if let Some(overall) = overall {
-        overall.finish_and_clear();
+        if let Some(overall) = overall {
+            overall.finish_and_clear();
+        }
+        if let Some(spacer) = spacer {
+            multiprogress.remove(&spacer);
+        }
+        println!();
+        println!("{final_log}");
+        println!();
     }
     Ok(summary)
 }
@@ -292,14 +277,6 @@ fn add_repo_bar(
 
 fn repo_prefix(name_width: usize, name: &str) -> String {
     format!("  {name:<name_width$}  ")
-}
-
-fn repo_counter(index: usize, total: usize) -> String {
-    if index + 1 == total {
-        format!(" · [{}/{total}]", index + 1)
-    } else {
-        String::new()
-    }
 }
 
 fn status(label: &str, color: &str, tty: bool) -> String {

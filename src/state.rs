@@ -10,6 +10,7 @@ pub struct State {
     // Last successful check, including "already up to date" responses.
     pub checked_at: HashMap<String, DateTime<Utc>>,
     pub last_scheduled_run: HashMap<String, String>,
+    pub failed_repos: HashMap<String, String>,
 }
 
 impl State {

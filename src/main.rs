@@ -56,6 +56,19 @@ enum Command {
         #[command(subcommand)]
         command: ScheduleCommand,
     },
+    /// List or retry repositories with recorded sync failures.
+    Failed {
+        #[command(subcommand)]
+        command: FailedCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum FailedCommand {
+    /// List recorded failed repositories without GitHub authentication.
+    List,
+    /// Retry sync for recorded failed repositories only.
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -178,6 +191,68 @@ async fn execute() -> Result<()> {
             ScheduleCommand::Status => schedule::status()?,
             ScheduleCommand::Remove => schedule::remove()?,
         },
+        Some(Command::Failed {
+            command: FailedCommand::List,
+        }) => {
+            let state = state::State::load()?;
+            let mut failed: Vec<_> = state.failed_repos.iter().collect();
+            failed.sort_by(|a, b| a.0.cmp(b.0));
+            if failed.is_empty() {
+                println!("No failed repositories recorded.");
+            } else {
+                for (name, reason) in failed {
+                    println!("{name}  {reason}");
+                }
+            }
+        }
+        Some(Command::Failed {
+            command: FailedCommand::Check,
+        }) => {
+            sync_failed(&mut cfg, cli.no_progress).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn sync_failed(cfg: &mut Config, no_progress: bool) -> Result<()> {
+    cfg.validate()?;
+    let failed = state::State::load()?.failed_repos;
+    if failed.is_empty() {
+        println!("No failed repositories recorded.");
+        return Ok(());
+    }
+    let secret = auth::token()?.ok_or_else(|| anyhow::anyhow!("No token found. Sign in with forksync auth login, or configure the credential store or GH_TOKEN for automated runs."))?;
+    let client = github::Github::new(&secret)?;
+    let viewer = client.viewer().await?;
+    std::fs::create_dir_all(config::app_dir()?)?;
+    let lockfile = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(config::app_dir()?.join("forksync.lock"))?;
+    lockfile
+        .try_lock_exclusive()
+        .map_err(|_| anyhow::anyhow!("Another forksync run is already active"))?;
+    let mut state = state::State::load()?;
+    let forks = client.forks(&cfg.owner, &viewer).await?;
+    let available: std::collections::HashSet<_> =
+        forks.iter().map(|repo| repo.full_name.as_str()).collect();
+    let mut names: Vec<_> = state.failed_repos.keys().cloned().collect();
+    names.sort();
+    for name in &names {
+        if !available.contains(name.as_str()) {
+            println!("{name}  unavailable; failure retained");
+        }
+    }
+    let repos = forks
+        .into_iter()
+        .filter(|repo| state.failed_repos.contains_key(&repo.full_name))
+        .collect();
+    let summary = sync::run(client, cfg, &mut state, repos, no_progress, false).await?;
+    state.save()?;
+    if summary.failed > 0 {
+        bail!("{} repository sync operation(s) failed", summary.failed);
     }
     Ok(())
 }
