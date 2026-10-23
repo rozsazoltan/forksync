@@ -4,11 +4,11 @@ use crate::{
     state::State,
 };
 use anyhow::Result;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rand::Rng;
 use std::{
     collections::VecDeque,
-    io::IsTerminal,
+    io::{IsTerminal, Write},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -69,9 +69,11 @@ pub async fn run(
     let multiprogress = MultiProgress::new();
     let tty =
         std::io::stdout().is_terminal() && std::io::stderr().is_terminal() && !no_progress && !json;
-    let style = ProgressStyle::with_template("{spinner:.cyan} {msg}")?;
+    let _cursor = CursorGuard::new(tty);
+    let style = ProgressStyle::with_template("{msg}{spinner:.cyan}")?;
+    let finished_style = ProgressStyle::with_template("{msg}")?;
     let overall = if tty && total > 0 {
-        let bar = multiprogress.add(ProgressBar::new(total as u64));
+        let bar = ProgressBar::with_draw_target(Some(total as u64), ProgressDrawTarget::hidden());
         bar.set_style(ProgressStyle::with_template(
             "{spinner:.cyan} {wide_bar:.cyan/blue} {pos}/{len} repositories · {msg}",
         )?);
@@ -80,6 +82,9 @@ pub async fn run(
     } else {
         None
     };
+    let mut overall_attached = false;
+    let spacer_style = ProgressStyle::with_template(" ")?;
+    let mut spacer = None;
     let pacer = Arc::new(Pacer::default());
     let mut queue: VecDeque<(usize, Repo)> = repos.into_iter().enumerate().collect();
     let mut running = JoinSet::new();
@@ -90,10 +95,7 @@ pub async fn run(
             "forksync · syncing up to {} repositories · {} workers · {}-day cooldown",
             cfg.max_repos_per_run, cfg.concurrency, cfg.grace_days
         );
-        if tty {
-            println!("  {:<name_width$}  RESULT", "REPOSITORY");
-            println!("  {}", "─".repeat(name_width + 18));
-        }
+        println!();
     }
 
     while !queue.is_empty() || !running.is_empty() {
@@ -105,9 +107,18 @@ pub async fn run(
             };
             let prefix = repo_prefix(name_width, &repo.full_name);
             let counter = repo_counter(index, total);
-            let bar = multiprogress.add(ProgressBar::new_spinner());
-            bar.set_style(style.clone());
-            bar.set_message(format!("{prefix} ..."));
+            let bar = add_repo_bar(
+                &multiprogress,
+                &overall,
+                &mut overall_attached,
+                &mut spacer,
+                &spacer_style,
+                &style,
+            );
+            if tty {
+                bar.enable_steady_tick(Duration::from_millis(100));
+            }
+            bar.set_message(format!("{prefix} "));
             if repo.archived || repo.disabled || repo.default_branch.is_empty() {
                 finish_line(
                     &bar,
@@ -117,6 +128,7 @@ pub async fn run(
                     ),
                     tty,
                     json,
+                    &finished_style,
                 );
                 summary.skipped += 1;
                 if let Some(overall) = &overall {
@@ -133,6 +145,7 @@ pub async fn run(
                     ),
                     tty,
                     json,
+                    &finished_style,
                 );
                 summary.skipped += 1;
                 if let Some(overall) = &overall {
@@ -168,6 +181,7 @@ pub async fn run(
                         format!("{prefix} {} Synced{counter}", status("DONE", "green", tty)),
                         tty,
                         json,
+                        &finished_style,
                     );
                 }
                 Outcome::Skip => {
@@ -181,15 +195,18 @@ pub async fn run(
                         ),
                         tty,
                         json,
+                        &finished_style,
                     );
                 }
                 Outcome::Failed(error) => {
                     summary.failed += 1;
+                    state.clear_checked(&name);
                     finish_line(
                         &bar,
                         format!("{prefix} {} {error}{counter}", status("FAILED", "red", tty)),
                         tty,
                         json,
+                        &finished_style,
                     );
                 }
             }
@@ -207,8 +224,14 @@ pub async fn run(
     for (index, repo) in queue {
         let prefix = repo_prefix(name_width, &repo.full_name);
         let counter = repo_counter(index, total);
-        let bar = multiprogress.add(ProgressBar::new_spinner());
-        bar.set_style(style.clone());
+        let bar = add_repo_bar(
+            &multiprogress,
+            &overall,
+            &mut overall_attached,
+            &mut spacer,
+            &spacer_style,
+            &style,
+        );
         finish_line(
             &bar,
             format!(
@@ -217,6 +240,7 @@ pub async fn run(
             ),
             tty,
             json,
+            &finished_style,
         );
         summary.skipped += 1;
         if let Some(overall) = &overall {
@@ -233,6 +257,37 @@ pub async fn run(
         overall.finish_and_clear();
     }
     Ok(summary)
+}
+
+fn add_repo_bar(
+    multiprogress: &MultiProgress,
+    overall: &Option<ProgressBar>,
+    overall_attached: &mut bool,
+    spacer: &mut Option<ProgressBar>,
+    spacer_style: &ProgressStyle,
+    style: &ProgressStyle,
+) -> ProgressBar {
+    let bar = ProgressBar::with_draw_target(None, ProgressDrawTarget::hidden());
+    bar.set_style(style.clone());
+    if let Some(overall) = overall {
+        if !*overall_attached {
+            multiprogress.add(bar.clone());
+            let blank = ProgressBar::with_draw_target(Some(1), ProgressDrawTarget::hidden());
+            blank.set_style(spacer_style.clone());
+            let blank = multiprogress.insert_after(&bar, blank);
+            multiprogress.insert_after(&blank, overall.clone());
+            overall.enable_steady_tick(Duration::from_millis(100));
+            *spacer = Some(blank);
+            *overall_attached = true;
+        } else if let Some(spacer) = spacer {
+            multiprogress.insert_before(spacer, bar.clone());
+        } else {
+            multiprogress.add(bar.clone());
+        }
+    } else {
+        multiprogress.add(bar.clone());
+    }
+    bar
 }
 
 fn repo_prefix(name_width: usize, name: &str) -> String {
@@ -260,14 +315,46 @@ fn status(label: &str, color: &str, tty: bool) -> String {
     format!("\x1b[{code}m[{label}]\x1b[0m")
 }
 
-fn finish_line(bar: &ProgressBar, message: String, tty: bool, json: bool) {
+fn finish_line(
+    bar: &ProgressBar,
+    message: String,
+    tty: bool,
+    json: bool,
+    finished_style: &ProgressStyle,
+) {
     if json {
         bar.finish_and_clear();
     } else if tty {
+        bar.set_style(finished_style.clone());
         bar.finish_with_message(message);
     } else {
         println!("{message}");
         bar.finish_and_clear();
+    }
+}
+
+struct CursorGuard {
+    enabled: bool,
+}
+
+impl CursorGuard {
+    fn new(enabled: bool) -> Self {
+        if enabled {
+            let mut stdout = std::io::stdout().lock();
+            let _ = stdout.write_all(b"\x1b[?25l");
+            let _ = stdout.flush();
+        }
+        Self { enabled }
+    }
+}
+
+impl Drop for CursorGuard {
+    fn drop(&mut self) {
+        if self.enabled {
+            let mut stdout = std::io::stdout().lock();
+            let _ = stdout.write_all(b"\x1b[?25h");
+            let _ = stdout.flush();
+        }
     }
 }
 

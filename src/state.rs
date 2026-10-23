@@ -43,6 +43,9 @@ impl State {
     pub fn mark_checked(&mut self, name: &str) {
         self.checked_at.insert(name.to_owned(), Utc::now());
     }
+    pub fn clear_checked(&mut self, name: &str) {
+        self.checked_at.remove(name);
+    }
     pub fn scheduled_today(&self, owner: &str) -> bool {
         self.last_scheduled_run.get(owner).map(String::as_str)
             == Some(&Local::now().format("%Y-%m-%d").to_string())

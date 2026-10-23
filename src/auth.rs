@@ -28,6 +28,7 @@ pub fn token() -> Result<Option<String>> {
 pub fn login() -> Result<String> {
     println!("GitHub sign-in · personal access token (PAT)");
     println!("Token needs access to forks and Contents: write permission.");
+    println!();
     let secret = Password::new("GitHub token (hidden):")
         .without_confirmation()
         .prompt()?;

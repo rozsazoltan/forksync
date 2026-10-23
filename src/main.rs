@@ -188,6 +188,7 @@ async fn menu(cfg: &mut Config) -> Result<()> {
     }
     loop {
         println!("\nforksync · v{}", env!("CARGO_PKG_VERSION"));
+        println!();
         let option = Select::new(
             "Choose an action",
             vec![
@@ -229,6 +230,7 @@ fn configure(cfg: &mut Config) -> Result<()> {
             "schedule_time",
             "Back",
         ];
+        println!();
         let key = Select::new("Choose a setting to change", opts).prompt()?;
         if key == "Back" {
             return Ok(());
@@ -237,6 +239,7 @@ fn configure(cfg: &mut Config) -> Result<()> {
             .get(key)
             .map(ToString::to_string)
             .unwrap_or_default();
+        println!();
         let input = Text::new(&format!("{key} (current: {current})")).prompt()?;
         let mut updated = cfg.clone();
         match updated.set(key, &input) {
@@ -264,6 +267,7 @@ async fn sync_now(
         if !interactive {
             bail!("Owner is missing. Set it with: forksync config set owner NAME");
         }
+        println!();
         cfg.owner = Text::new("GitHub user or organization:")
             .prompt()?
             .trim()
@@ -287,6 +291,7 @@ async fn sync_now(
             if let Err(err) = auth::store(&token) {
                 eprintln!("Warning: could not save token ({err}); it remains available for this run. Scheduled runs require GH_TOKEN.");
             }
+            println!();
             token
         },
         None => bail!("No token found. Sign in with forksync auth login, or configure the credential store or GH_TOKEN for automated runs."),
