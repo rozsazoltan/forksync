@@ -16,7 +16,7 @@ use std::{fs::OpenOptions, io::IsTerminal};
 #[command(
     name = "forksync",
     version,
-    about = "GitHub fork sync · egyetlen executable"
+    about = "GitHub fork sync · one executable"
 )]
 struct Cli {
     /// Never ask questions (for scheduled runs or scripts).
@@ -100,10 +100,10 @@ async fn execute() -> Result<()> {
                 })
         )
     {
-        bail!("--json csak a sync, config list és config get parancsokhoz használható");
+        bail!("--json is available only for sync, config list, and config get");
     }
     match cli.command {
-        None if non_interactive => bail!("Nem interaktív módban adj meg egy alparancsot"),
+        None if non_interactive => bail!("Provide a command in non-interactive mode"),
         None => menu(&mut cfg).await?,
         Some(Command::Sync { owner, scheduled }) => {
             if let Some(owner) = owner {
@@ -121,7 +121,7 @@ async fn execute() -> Result<()> {
         }
         Some(Command::Config { command }) => match command {
             None if non_interactive => {
-                bail!("Nem interaktív módban használd: forksync config list|get|set|unset")
+                bail!("Use forksync config list|get|set|unset in non-interactive mode")
             }
             None => configure(&mut cfg)?,
             Some(ConfigCommand::List) if cli.json => println!("{}", serde_json::to_string(&cfg)?),
@@ -131,7 +131,7 @@ async fn execute() -> Result<()> {
                 let repr = toml::Value::try_from(&cfg)?;
                 let value = repr
                     .get(&key)
-                    .ok_or_else(|| anyhow::anyhow!("Ismeretlen kulcs: {key}"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Unknown key: {key}"))?;
                 if cli.json {
                     let mut data = serde_json::Map::new();
                     data.insert(key, toml_to_json(value)?);
@@ -143,38 +143,36 @@ async fn execute() -> Result<()> {
             Some(ConfigCommand::Unset { key }) => {
                 cfg.unset(&key)?;
                 cfg.save()?;
-                println!("Alapérték visszaállítva: {key}");
+                println!("Reset to default: {key}");
             }
             Some(ConfigCommand::Set { key, value }) => {
                 cfg.set(&key, &value)?;
                 cfg.save()?;
-                println!("Mentve: {key}");
+                println!("Saved: {key}");
             }
         },
-        Some(Command::Auth { command }) => {
-            match command {
-                AuthCommand::Login => {
-                    if non_interactive {
-                        bail!("Az auth login terminált igényel; időzítéshez használj GH_TOKEN-t");
-                    }
-                    let secret = auth::login()?;
-                    let viewer = github::Github::new(&secret)?.viewer().await?;
-                    auth::store(&secret)?;
-                    println!("Sikeres GitHub bejelentkezés: {viewer}");
+        Some(Command::Auth { command }) => match command {
+            AuthCommand::Login => {
+                if non_interactive {
+                    bail!("Auth login requires a terminal; use GH_TOKEN for scheduled runs");
                 }
-                AuthCommand::Logout => {
-                    auth::logout()?;
-                    println!("A mentett token törölve. A GH_TOKEN / GITHUB_TOKEN változók nem változtak.");
-                }
-                AuthCommand::Status => match auth::token()? {
-                    Some(secret) => println!(
-                        "Bejelentkezve: {}",
-                        github::Github::new(&secret)?.viewer().await?
-                    ),
-                    None => println!("Nincs token. Futtasd: forksync auth login"),
-                },
+                let secret = auth::login()?;
+                let viewer = github::Github::new(&secret)?.viewer().await?;
+                auth::store(&secret)?;
+                println!("Signed in to GitHub as {viewer}");
             }
-        }
+            AuthCommand::Logout => {
+                auth::logout()?;
+                println!("Stored token removed. GH_TOKEN and GITHUB_TOKEN were not changed.");
+            }
+            AuthCommand::Status => match auth::token()? {
+                Some(secret) => println!(
+                    "Signed in as {}",
+                    github::Github::new(&secret)?.viewer().await?
+                ),
+                None => println!("No token found. Run: forksync auth login"),
+            },
+        },
         Some(Command::Schedule { command }) => match command {
             ScheduleCommand::Install => schedule::install(&cfg)?,
             ScheduleCommand::Status => schedule::status()?,
@@ -186,33 +184,33 @@ async fn execute() -> Result<()> {
 
 async fn menu(cfg: &mut Config) -> Result<()> {
     if !std::io::stdin().is_terminal() {
-        bail!("Interaktív menühöz terminál szükséges. Használd a forksync sync parancsot.");
+        bail!("The interactive menu requires a terminal. Use forksync sync instead.");
     }
     loop {
         println!("\nforksync · v{}", env!("CARGO_PKG_VERSION"));
         let option = Select::new(
-            "Művelet",
+            "Choose an action",
             vec![
-                "Szinkronizálás",
-                "Beállítások",
-                "GitHub bejelentkezés",
-                "Napi időzítés bekapcsolása",
-                "Napi időzítés eltávolítása",
-                "Kilépés",
+                "Sync repositories",
+                "Settings",
+                "Sign in to GitHub",
+                "Install daily schedule",
+                "Remove daily schedule",
+                "Quit",
             ],
         )
         .prompt()?;
         match option {
-            "Szinkronizálás" => sync_now(cfg, true, false, false, false).await?,
-            "Beállítások" => configure(cfg)?,
-            "GitHub bejelentkezés" => {
+            "Sync repositories" => sync_now(cfg, true, false, false, false).await?,
+            "Settings" => configure(cfg)?,
+            "Sign in to GitHub" => {
                 let secret = auth::login()?;
                 let viewer = github::Github::new(&secret)?.viewer().await?;
                 auth::store(&secret)?;
-                println!("Bejelentkezve: {viewer}");
+                println!("Signed in as {viewer}");
             }
-            "Napi időzítés bekapcsolása" => schedule::install(cfg)?,
-            "Napi időzítés eltávolítása" => schedule::remove()?,
+            "Install daily schedule" => schedule::install(cfg)?,
+            "Remove daily schedule" => schedule::remove()?,
             _ => return Ok(()),
         }
     }
@@ -229,24 +227,24 @@ fn configure(cfg: &mut Config) -> Result<()> {
             "max_wait_seconds",
             "grace_days",
             "schedule_time",
-            "Vissza",
+            "Back",
         ];
-        let key = Select::new("Melyik beállítást módosítod?", opts).prompt()?;
-        if key == "Vissza" {
+        let key = Select::new("Choose a setting to change", opts).prompt()?;
+        if key == "Back" {
             return Ok(());
         }
         let current = toml::Value::try_from(&*cfg)?
             .get(key)
             .map(ToString::to_string)
             .unwrap_or_default();
-        let input = Text::new(&format!("{key} (jelenleg: {current})")).prompt()?;
+        let input = Text::new(&format!("{key} (current: {current})")).prompt()?;
         let mut updated = cfg.clone();
         match updated.set(key, &input) {
             Ok(()) => {
                 updated.save()?;
                 *cfg = updated;
             }
-            Err(e) => eprintln!("Érvénytelen beállítás: {e}"),
+            Err(e) => eprintln!("Invalid setting: {e}"),
         }
     }
 }
@@ -264,9 +262,9 @@ async fn sync_now(
 ) -> Result<()> {
     if cfg.owner.is_empty() {
         if !interactive {
-            bail!("Hiányzik az owner. Beállítás: forksync config set owner NÉV");
+            bail!("Owner is missing. Set it with: forksync config set owner NAME");
         }
-        cfg.owner = Text::new("GitHub felhasználó vagy szervezet:")
+        cfg.owner = Text::new("GitHub user or organization:")
             .prompt()?
             .trim()
             .to_owned();
@@ -276,7 +274,7 @@ async fn sync_now(
     let available_token = match auth::token() {
         Ok(value) => value,
         Err(err) if interactive => {
-            eprintln!("Tokentároló: {err}");
+            eprintln!("Credential store: {err}");
             None
         }
         Err(err) => return Err(err),
@@ -287,11 +285,11 @@ async fn sync_now(
             let token = auth::login()?;
             github::Github::new(&token)?.viewer().await?;
             if let Err(err) = auth::store(&token) {
-                eprintln!("Figyelem: a token nem menthető ({err}); erre a futásra továbbra is használható. Időzítéshez GH_TOKEN szükséges.");
+                eprintln!("Warning: could not save token ({err}); it remains available for this run. Scheduled runs require GH_TOKEN.");
             }
             token
         },
-        None => bail!("Nincs token. Interaktív belépés: forksync auth login; automatikus futáshoz a felhasználói hitelesítőadat-tároló vagy GH_TOKEN szükséges."),
+        None => bail!("No token found. Sign in with forksync auth login, or configure the credential store or GH_TOKEN for automated runs."),
     };
     let client = github::Github::new(&secret)?;
     let viewer = client.viewer().await?;
@@ -305,7 +303,7 @@ async fn sync_now(
         .open(config::app_dir()?.join("forksync.lock"))?;
     lockfile
         .try_lock_exclusive()
-        .map_err(|_| anyhow::anyhow!("Egy másik forksync futás már aktív"))?;
+        .map_err(|_| anyhow::anyhow!("Another forksync run is already active"))?;
     let mut state = state::State::load()?;
     if scheduled && state.scheduled_today(&cfg.owner) {
         if json {
@@ -315,7 +313,7 @@ async fn sync_now(
             );
         } else {
             println!(
-                "[SKIP] A napi ütemezett futás ma már megtörtént: {}",
+                "[SKIP] Scheduled run already completed today: {}",
                 cfg.owner
             );
         }
@@ -331,7 +329,7 @@ async fn sync_now(
         println!("{}", serde_json::to_string(&summary)?);
     }
     if summary.failed > 0 {
-        bail!("{} repository szinkronizálása sikertelen", summary.failed);
+        bail!("{} repository sync operation(s) failed", summary.failed);
     }
     Ok(())
 }

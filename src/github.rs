@@ -51,7 +51,7 @@ impl Github {
         let bearer = format!("Bearer {token}");
         headers.insert(
             header::AUTHORIZATION,
-            header::HeaderValue::from_str(&bearer).context("Érvénytelen token formátum")?,
+            header::HeaderValue::from_str(&bearer).context("Invalid token format")?,
         );
         // Never print headers or reqwest::Request when reporting failures.
         Ok(Self {
@@ -103,7 +103,7 @@ impl Github {
             }
             return Ok(response);
         }
-        bail!("Sikertelen GitHub API-kérés: {url}")
+        bail!("GitHub API request failed: {url}")
     }
 
     pub async fn viewer(&self) -> Result<String> {
@@ -115,7 +115,7 @@ impl Github {
             )
             .await?;
         if !res.status().is_success() {
-            bail!("GitHub hitelesítési hiba: HTTP {}", res.status());
+            bail!("GitHub authentication failed: HTTP {}", res.status());
         }
         Ok(res.json::<User>().await?.login)
     }
@@ -155,12 +155,12 @@ impl Github {
             let url = format!("{base}&per_page=100&page={page}");
             let response = self.request(reqwest::Method::GET, &url, None).await?;
             if !response.status().is_success() {
-                bail!("A forkok listázása sikertelen: HTTP {}", response.status());
+                bail!("Could not list forks: HTTP {}", response.status());
             }
             let chunk: Vec<Repo> = response
                 .json()
                 .await
-                .context("Hibás GitHub repository-lista")?;
+                .context("Invalid GitHub repository list")?;
             let count = chunk.len();
             forks.extend(chunk.into_iter().filter(|r| {
                 r.fork
@@ -192,7 +192,7 @@ impl Github {
             let message = body
                 .get("message")
                 .and_then(|v| v.as_str())
-                .unwrap_or("GitHub API hiba");
+                .unwrap_or("GitHub API error");
             bail!("HTTP {status}: {}", message.replace(['\r', '\n'], " "));
         }
         let message = response

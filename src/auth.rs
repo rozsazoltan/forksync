@@ -5,8 +5,7 @@ const SERVICE: &str = "forksync.github.com";
 const ACCOUNT: &str = "github-token";
 
 fn entry() -> Result<keyring::Entry> {
-    keyring::Entry::new(SERVICE, ACCOUNT)
-        .context("A rendszer hitelesítőadat-tárolója nem érhető el")
+    keyring::Entry::new(SERVICE, ACCOUNT).context("System credential store is unavailable")
 }
 
 pub fn token() -> Result<Option<String>> {
@@ -20,24 +19,26 @@ pub fn token() -> Result<Option<String>> {
     match entry()?.get_password() {
         Ok(value) if !value.is_empty() => Ok(Some(value)),
         Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => bail!("Nem sikerült kiolvasni a biztonságos tokentárolót: {error}. Használható a GH_TOKEN változó is."),
+        Err(error) => {
+            bail!("Could not read secure credential store: {error}. You can also use GH_TOKEN.")
+        }
     }
 }
 
 pub fn login() -> Result<String> {
-    println!("GitHub bejelentkezés: személyes hozzáférési token (PAT).");
-    println!("A tokennek hozzáférést kell adni a forkokhoz és a Contents: write jogosultsághoz.");
-    let secret = Password::new("GitHub token (rejtett):")
+    println!("GitHub sign-in · personal access token (PAT)");
+    println!("Token needs access to forks and Contents: write permission.");
+    let secret = Password::new("GitHub token (hidden):")
         .without_confirmation()
         .prompt()?;
     if secret.trim().is_empty() {
-        bail!("Üres token");
+        bail!("Token cannot be empty");
     }
     Ok(secret)
 }
 
 pub fn store(token: &str) -> Result<()> {
-    entry()?.set_password(token).context("A token nem menthető a rendszer biztonságos tárolójába. Használd a GH_TOKEN környezeti változót")
+    entry()?.set_password(token).context("Could not save token to secure system storage. Use the GH_TOKEN environment variable instead")
 }
 
 pub fn logout() -> Result<()> {

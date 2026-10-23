@@ -6,15 +6,15 @@ use std::{fs, path::PathBuf, process::Command};
 const JOB: &str = "forksync";
 
 fn exe() -> Result<PathBuf> {
-    std::env::current_exe().context("Az executable útvonala nem olvasható")
+    std::env::current_exe().context("Could not read executable path")
 }
 fn invoke(command: &mut Command) -> Result<()> {
     let output = command
         .output()
-        .context("Az időzítés rendszerparancsa nem indult")?;
+        .context("Could not start scheduler command")?;
     if !output.status.success() {
         bail!(
-            "Időzítési hiba: {} {}",
+            "Scheduler error: {} {}",
             String::from_utf8_lossy(&output.stdout).trim(),
             String::from_utf8_lossy(&output.stderr).trim()
         );
@@ -25,7 +25,7 @@ fn invoke(command: &mut Command) -> Result<()> {
 pub fn install(cfg: &Config) -> Result<()> {
     cfg.validate()?;
     if cfg.owner.is_empty() {
-        bail!("Előbb állítsd be az owner értékét: forksync config set owner NÉV");
+        bail!("Set owner first: forksync config set owner NAME");
     }
     let (hour, minute) = crate::config::parse_schedule_time(&cfg.schedule_time)?;
     let binary = exe()?;
@@ -48,7 +48,7 @@ pub fn install(cfg: &Config) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         let dir = dirs::config_dir()
-            .context("Hiányzik a config könyvtár")?
+            .context("Configuration directory is missing")?
             .join("systemd/user");
         fs::create_dir_all(&dir)?;
         let escaped_path = binary
@@ -65,7 +65,7 @@ pub fn install(cfg: &Config) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let dir = dirs::home_dir()
-            .context("Hiányzik a home könyvtár")?
+            .context("Home directory is missing")?
             .join("Library/LaunchAgents");
         fs::create_dir_all(&dir)?;
         let file = dir.join("dev.forksync.daily.plist");
@@ -85,11 +85,11 @@ pub fn install(cfg: &Config) -> Result<()> {
         )?;
     }
     println!(
-        "Napi időzítés beállítva: {} (helyi idő), {}",
+        "Daily schedule installed: {} (local time), {}",
         cfg.schedule_time,
         binary.display()
     );
-    println!("Az ütemező a jelenlegi executable-útvonalat használja. Áthelyezés után futtasd újra a schedule install parancsot.");
+    println!("Scheduler uses the current executable path. Run schedule install again after moving the executable.");
     Ok(())
 }
 
@@ -102,7 +102,7 @@ pub fn remove() -> Result<()> {
             .args(["--user", "disable", "--now", "forksync.timer"])
             .status();
         let dir = dirs::config_dir()
-            .context("Hiányzó config könyvtár")?
+            .context("Configuration directory is missing")?
             .join("systemd/user");
         for name in ["forksync.timer", "forksync.service"] {
             let p = dir.join(name);
@@ -119,13 +119,13 @@ pub fn remove() -> Result<()> {
             .args(["bootout", &format!("{domain}/dev.forksync.daily")])
             .status();
         let file = dirs::home_dir()
-            .context("Hiányzó home könyvtár")?
+            .context("Home directory is missing")?
             .join("Library/LaunchAgents/dev.forksync.daily.plist");
         if file.exists() {
             fs::remove_file(file)?;
         }
     }
-    println!("Időzítés eltávolítva.");
+    println!("Daily schedule removed.");
     Ok(())
 }
 
@@ -135,39 +135,39 @@ pub fn status() -> Result<()> {
         let output = Command::new("schtasks")
             .args(["/Query", "/TN", JOB])
             .output()
-            .context("Az időzítés rendszerparancsa nem indult")?;
+            .context("Could not start scheduler command")?;
         if output.status.success() {
-            println!("Időzítés: telepítve ({JOB})");
+            println!("Schedule: installed ({JOB})");
             print!("{}", String::from_utf8_lossy(&output.stdout));
         } else {
-            println!("Időzítés: nincs telepítve");
+            println!("Schedule: not installed");
         }
     }
     #[cfg(target_os = "linux")]
     {
         let dir = dirs::config_dir()
-            .context("Hiányzó config könyvtár")?
+            .context("Configuration directory is missing")?
             .join("systemd/user");
         let service = dir.join("forksync.service");
         let timer = dir.join("forksync.timer");
         if service.exists() && timer.exists() {
-            println!("Időzítés: telepítve (systemd user timer)");
+            println!("Schedule: installed (systemd user timer)");
             let _ = Command::new("systemctl")
                 .args(["--user", "is-active", "forksync.timer"])
                 .status();
         } else {
-            println!("Időzítés: nincs telepítve");
+            println!("Schedule: not installed");
         }
     }
     #[cfg(target_os = "macos")]
     {
         let file = dirs::home_dir()
-            .context("Hiányzó home könyvtár")?
+            .context("Home directory is missing")?
             .join("Library/LaunchAgents/dev.forksync.daily.plist");
         if file.exists() {
-            println!("Időzítés: telepítve (launchd LaunchAgent)");
+            println!("Schedule: installed (launchd LaunchAgent)");
         } else {
-            println!("Időzítés: nincs telepítve");
+            println!("Schedule: not installed");
         }
     }
     Ok(())
@@ -177,7 +177,7 @@ pub fn status() -> Result<()> {
 fn launchd_domain() -> Result<String> {
     let output = Command::new("id").arg("-u").output()?;
     if !output.status.success() {
-        bail!("Nem sikerült lekérni a user ID-t");
+        bail!("Could not read user ID");
     }
     Ok(format!(
         "gui/{}",

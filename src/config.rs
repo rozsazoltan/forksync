@@ -37,7 +37,7 @@ impl Default for Config {
 }
 
 pub fn app_dir() -> Result<PathBuf> {
-    let base = dirs::config_dir().context("Nem található a felhasználó konfigurációs mappája")?;
+    let base = dirs::config_dir().context("User configuration directory not found")?;
     Ok(base.join("forksync"))
 }
 
@@ -55,27 +55,27 @@ impl Config {
             return Ok(Self::default());
         }
         let config: Self = toml::from_str(&fs::read_to_string(&path)?)
-            .with_context(|| format!("Érvénytelen konfiguráció: {}", path.display()))?;
+            .with_context(|| format!("Invalid configuration: {}", path.display()))?;
         config.validate()?;
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<()> {
         if self.max_repos_per_run == 0 {
-            bail!("max_repos_per_run legalább 1 legyen");
+            bail!("max_repos_per_run must be at least 1");
         }
         if self.concurrency == 0 || self.concurrency > 32 {
             bail!("concurrency: 1..32");
         }
         if self.min_wait_seconds > self.max_wait_seconds || self.max_wait_seconds > 3600 {
-            bail!("A várakozás 0..3600 másodperc legyen, min <= max");
+            bail!("Wait must be 0..3600 seconds, with min <= max");
         }
         if !(1..=3650).contains(&self.grace_days) {
             bail!("grace_days: 1..3650");
         }
         parse_schedule_time(&self.schedule_time)?;
         if !self.owner.is_empty() && !valid_owner(&self.owner) {
-            bail!("Érvénytelen GitHub-felhasználó vagy szervezet");
+            bail!("Invalid GitHub user or organization");
         }
         Ok(())
     }
@@ -83,7 +83,10 @@ impl Config {
     pub fn save(&self) -> Result<()> {
         self.validate()?;
         let path = config_path()?;
-        fs::create_dir_all(path.parent().context("Hiányzó konfigurációs mappa")?)?;
+        fs::create_dir_all(
+            path.parent()
+                .context("Configuration directory is missing")?,
+        )?;
         let body = toml::to_string_pretty(self)?;
         let mut attempt = 0u32;
         let (temporary, mut file) = loop {
@@ -126,7 +129,7 @@ impl Config {
             "max_wait_seconds" => updated.max_wait_seconds = value.parse()?,
             "grace_days" => updated.grace_days = value.parse()?,
             "schedule_time" => updated.schedule_time = value.into(),
-            _ => bail!("Ismeretlen konfigurációs kulcs: {key}"),
+            _ => bail!("Unknown configuration key: {key}"),
         }
         updated.validate()?;
         *self = updated;
@@ -144,7 +147,7 @@ impl Config {
             "max_wait_seconds" => updated.max_wait_seconds = default.max_wait_seconds,
             "grace_days" => updated.grace_days = default.grace_days,
             "schedule_time" => updated.schedule_time = default.schedule_time,
-            _ => bail!("Ismeretlen konfigurációs kulcs: {key}"),
+            _ => bail!("Unknown configuration key: {key}"),
         }
         updated.validate()?;
         *self = updated;
@@ -160,7 +163,7 @@ pub fn parse_schedule_time(time: &str) -> Result<(u8, u8)> {
     let hour: u8 = hour.parse()?;
     let minute: u8 = minute.parse()?;
     if hour > 23 || minute > 59 {
-        bail!("schedule_time: HH:MM, érvényes idővel");
+        bail!("schedule_time must be a valid HH:MM time");
     }
     Ok((hour, minute))
 }
