@@ -1,0 +1,153 @@
+name: Release
+run-name: ${{ github.event_name == 'workflow_dispatch' && 'Prepare CalVer release' || github.ref_name }}
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forksync-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Calculate and tag the next calendar version
+        id: version
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUESTED_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REQUESTED_REF" = "refs/heads/$DEFAULT_BRANCH"
+          git fetch origin --tags
+          git fetch origin "$DEFAULT_BRANCH"
+          BASE="$(git rev-parse HEAD)"
+          test "$BASE" = "$(git rev-parse "origin/$DEFAULT_BRANCH")"
+          test -z "$(git status --porcelain)"
+          TAG="$(python3 scripts/calver.py bump)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.toml Cargo.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: release $TAG"
+          fi
+          git tag -a "$TAG" -m "Release $TAG"
+          # Reject concurrent default-branch advancement instead of overwriting it.
+          git push --atomic "--force-with-lease=refs/heads/$DEFAULT_BRANCH:$BASE" origin "HEAD:refs/heads/$DEFAULT_BRANCH" "refs/tags/$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: always() && (needs.prepare.result == 'success' || (github.event_name == 'push' && needs.prepare.result == 'skipped'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-x86_64
+            ext: ''
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            label: linux-aarch64
+            ext: ''
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            label: macos-x86_64
+            ext: ''
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            label: macos-aarch64
+            ext: ''
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            label: windows-x86_64
+            ext: '.exe'
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux credential-store build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Verify tag and Cargo metadata
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
+        run: python3 scripts/calver.py validate-tag "$RELEASE_TAG"
+      - name: Test
+        shell: bash
+        run: cargo test --locked --target '${{ matrix.target }}'
+      - name: Build
+        shell: bash
+        run: cargo build --locked --release --target '${{ matrix.target }}'
+      - name: Include complete unmodified AGPL-3.0 license
+        shell: bash
+        run: curl --fail --location --retry 3 --silent --show-error https://www.gnu.org/licenses/agpl-3.0.txt -o LICENSE
+      - name: Create bin-compatible portable archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          LABEL: ${{ matrix.label }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, zipfile
+          target, label, ext = os.environ['TARGET'], os.environ['LABEL'], os.environ['EXT']
+          binary = pathlib.Path('target') / target / 'release' / ('forksync' + ext)
+          out = pathlib.Path('dist'); out.mkdir(exist_ok=True)
+          with zipfile.ZipFile(out / f'forksync-{label}.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              z.write(binary, 'forksync' + ext)
+              z.write('LICENSE', 'LICENSE')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forksync-${{ matrix.label }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: forksync-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum forksync-*.zip > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
